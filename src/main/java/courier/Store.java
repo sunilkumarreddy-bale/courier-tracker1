@@ -21,7 +21,10 @@ public final class Store {
       String service,
       LocalDate expected) {}
 
-  private final String url, username, password;
+  private final String url;
+  private final String username;
+  private final String password;
+
   private static final Map<String, List<String>> NEXT =
       Map.of(
           "REGISTERED",
@@ -40,9 +43,13 @@ public final class Store {
   }
 
   public Store(String url, String username, String password) {
-    this.url = url;
-    this.username = username;
-    this.password = password;
+    this.url = Objects.requireNonNull(url, "Database URL cannot be null");
+    this.username = username == null ? "" : username;
+    this.password = password == null ? "" : password;
+  }
+
+  public String getUrl() {
+    return url;
   }
 
   Connection connect() throws SQLException {
@@ -73,10 +80,13 @@ public final class Store {
       bind(s, args);
       try (ResultSet r = s.executeQuery()) {
         List<Map<String, Object>> rows = new ArrayList<>();
+        ResultSetMetaData meta = r.getMetaData();
+        int cols = meta.getColumnCount();
         while (r.next()) {
           Map<String, Object> row = new LinkedHashMap<>();
-          for (int i = 1; i <= r.getMetaData().getColumnCount(); i++)
-            row.put(r.getMetaData().getColumnLabel(i).toLowerCase(Locale.ROOT), r.getObject(i));
+          for (int i = 1; i <= cols; i++) {
+            row.put(meta.getColumnLabel(i).toLowerCase(Locale.ROOT), r.getObject(i));
+          }
           rows.add(row);
         }
         return rows;
@@ -85,7 +95,9 @@ public final class Store {
   }
 
   static void bind(PreparedStatement s, Object... args) throws SQLException {
-    for (int i = 0; i < args.length; i++) s.setObject(i + 1, args[i]);
+    for (int i = 0; i < args.length; i++) {
+      s.setObject(i + 1, args[i]);
+    }
   }
 
   static int execute(Connection c, String sql, Object... args) throws SQLException {
@@ -100,7 +112,9 @@ public final class Store {
       bind(s, args);
       s.executeUpdate();
       try (ResultSet r = s.getGeneratedKeys()) {
-        if (!r.next()) throw new SQLException("Missing generated key");
+        if (!r.next()) {
+          throw new SQLException("Missing generated key");
+        }
         return r.getLong(1);
       }
     }
@@ -110,13 +124,22 @@ public final class Store {
     try (Connection c = connect()) {
       String schema;
       try (var in = Store.class.getResourceAsStream("/schema.sql")) {
-        schema = new String(Objects.requireNonNull(in).readAllBytes(), StandardCharsets.UTF_8);
+        if (in == null) {
+          throw new IllegalStateException("schema.sql resource not found on classpath");
+        }
+        schema = new String(in.readAllBytes(), StandardCharsets.UTF_8);
       }
-      for (String sql : schema.split(";")) if (!sql.isBlank()) execute(c, sql);
+      for (String sql : schema.split(";")) {
+        String trimmed = sql.trim();
+        if (!trimmed.isBlank()) {
+          execute(c, trimmed);
+        }
+      }
       if (query(c, "SELECT id FROM users LIMIT 1").isEmpty()) {
-        if (adminEmail == null || !adminEmail.contains("@") || adminPassword.length < 12)
+        if (adminEmail == null || !adminEmail.contains("@") || adminPassword == null || adminPassword.length < 12) {
           throw new IllegalArgumentException(
               "Empty database: set ADMIN_EMAIL and ADMIN_PASSWORD (12+ characters).");
+        }
         execute(
             c,
             "INSERT INTO users(name,email,password_hash,role) VALUES(?,?,?,?)",
@@ -129,6 +152,9 @@ public final class Store {
   }
 
   public User login(String email, char[] password) throws Exception {
+    if (email == null || password == null) {
+      throw new IllegalArgumentException("Invalid email or password");
+    }
     try (Connection c = connect()) {
       var rows =
           query(
@@ -136,8 +162,9 @@ public final class Store {
               "SELECT * FROM users WHERE email=? AND active=TRUE",
               email.trim().toLowerCase(Locale.ROOT));
       if (rows.isEmpty()
-          || !Passwords.verify(password, rows.get(0).get("password_hash").toString()))
+          || !Passwords.verify(password, rows.get(0).get("password_hash").toString())) {
         throw new IllegalArgumentException("Invalid email or password");
+      }
       var r = rows.get(0);
       return new User(
           ((Number) r.get("id")).longValue(), r.get("name").toString(), r.get("role").toString());
@@ -147,29 +174,39 @@ public final class Store {
   }
 
   private void authorize(Connection c, User user, boolean admin) throws Exception {
-    if (user == null) throw new IllegalArgumentException("Sign in first");
+    if (user == null) {
+      throw new IllegalArgumentException("Sign in first");
+    }
     var rows = query(c, "SELECT role FROM users WHERE id=? AND active=TRUE", user.id());
     if (rows.isEmpty()
         || !rows.get(0).get("role").equals(user.role())
-        || (admin && !user.role().equals("ADMIN")))
+        || (admin && !user.role().equals("ADMIN"))) {
       throw new IllegalArgumentException("Permission denied");
+    }
   }
 
   static String required(String value, int max) {
-    if (value == null || value.isBlank() || value.trim().length() > max)
+    if (value == null || value.isBlank() || value.trim().length() > max) {
       throw new IllegalArgumentException(
           "Required field is empty or too long (maximum " + max + ")");
+    }
     return value.trim();
   }
 
   public void createAgent(User user, String name, String email, char[] pass) throws Exception {
+    if (pass == null) {
+      throw new IllegalArgumentException("Password needs 12+ characters");
+    }
     try {
       transaction(
           c -> {
             authorize(c, user, true);
-            if (pass.length < 12)
+            if (pass.length < 12) {
               throw new IllegalArgumentException("Password needs 12+ characters");
-            if (!email.contains("@")) throw new IllegalArgumentException("Invalid email");
+            }
+            if (email == null || !email.contains("@")) {
+              throw new IllegalArgumentException("Invalid email");
+            }
             execute(
                 c,
                 "INSERT INTO users(name,email,password_hash,role) VALUES(?,?,?,?)",
@@ -188,24 +225,28 @@ public final class Store {
     return transaction(
         c -> {
           authorize(c, user, true);
+          if (r == null) {
+            throw new IllegalArgumentException("Registration details required");
+          }
           if (r.weight() == null
               || r.weight().signum() <= 0
               || r.weight().compareTo(new BigDecimal("99999999.99")) > 0
-              || r.weight().scale() > 2)
+              || r.weight().scale() > 2) {
             throw new IllegalArgumentException(
                 "Weight must be positive, with at most two decimals");
+          }
           if (r.expected() == null
-              || r.expected().isBefore(LocalDate.now(java.time.ZoneOffset.UTC)))
+              || r.expected().isBefore(LocalDate.now(java.time.ZoneOffset.UTC))) {
             throw new IllegalArgumentException("Expected date cannot be in the past");
-          if (!List.of("STANDARD", "EXPRESS").contains(r.service()))
+          }
+          if (r.service() == null || !List.of("STANDARD", "EXPRESS").contains(r.service())) {
             throw new IllegalArgumentException("Invalid service");
+          }
           String tracking = "CT-" + UUID.randomUUID();
           long id =
               insert(
                   c,
-                  "INSERT INTO"
-                      + " shipments(tracking,sender,sender_contact,sender_address,recipient,recipient_contact,recipient_address,weight,service,expected,status)"
-                      + " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                  "INSERT INTO shipments(tracking,sender,sender_contact,sender_address,recipient,recipient_contact,recipient_address,weight,service,expected,status) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                   tracking,
                   required(r.sender(), 100),
                   required(r.senderContact(), 254),
@@ -246,17 +287,17 @@ public final class Store {
       throws Exception {
     try (Connection c = connect()) {
       authorize(c, user, false);
+      String term = search == null ? "" : search.trim();
+      String st = status == null ? "" : status.trim();
       return query(
           c,
-          "SELECT id,tracking,recipient,service,weight,status,expected,agent_id,version FROM"
-              + " shipments WHERE (?='ADMIN' OR agent_id=?) AND (tracking LIKE ? OR recipient LIKE"
-              + " ?) AND (?='' OR status=?) ORDER BY id DESC LIMIT 25 OFFSET ?",
+          "SELECT id,tracking,recipient,service,weight,status,expected,agent_id,version FROM shipments WHERE (?='ADMIN' OR agent_id=?) AND (tracking LIKE ? OR recipient LIKE ?) AND (?='' OR status=?) ORDER BY id DESC LIMIT 25 OFFSET ?",
           user.role(),
           user.id(),
-          "%" + search + "%",
-          "%" + search + "%",
-          status,
-          status,
+          "%" + term + "%",
+          "%" + term + "%",
+          st,
+          st,
           Math.max(0, page) * 25);
     }
   }
@@ -267,17 +308,24 @@ public final class Store {
         c -> {
           authorize(c, user, agent != null);
           var rows = query(c, "SELECT * FROM shipments WHERE id=? FOR UPDATE", id);
-          if (rows.isEmpty()) throw new IllegalArgumentException("Parcel not found");
+          if (rows.isEmpty()) {
+            throw new IllegalArgumentException("Parcel not found");
+          }
           var r = rows.get(0);
           String status = r.get("status").toString();
-          if (next(status).isEmpty()) throw new IllegalArgumentException("Parcel is complete");
+          if (next(status).isEmpty()) {
+            throw new IllegalArgumentException("Parcel is complete");
+          }
           Object assigned = r.get("agent_id");
           if (!user.role().equals("ADMIN")
-              && (assigned == null || ((Number) assigned).longValue() != user.id()))
+              && (assigned == null || ((Number) assigned).longValue() != user.id())) {
             throw new IllegalArgumentException("Parcel belongs to another agent");
+          }
           if (agent != null) {
             if (query(c, "SELECT id FROM users WHERE id=? AND role='AGENT' AND active=TRUE", agent)
-                .isEmpty()) throw new IllegalArgumentException("Active agent required");
+                .isEmpty()) {
+              throw new IllegalArgumentException("Active agent required");
+            }
             execute(c, "UPDATE shipments SET agent_id=?,version=version+1 WHERE id=?", agent, id);
             event(c, id, status, "Dispatch", "Assigned to agent #" + agent, user);
             execute(
@@ -287,15 +335,19 @@ public final class Store {
                 id,
                 "Assigned: " + r.get("tracking"));
           } else {
-            if (!next(status).contains(to))
+            if (!next(status).contains(to)) {
               throw new IllegalArgumentException("Invalid status transition");
+            }
             if (to.equals("CANCELLED")) {
-              if (!user.role().equals("ADMIN"))
+              if (!user.role().equals("ADMIN")) {
                 throw new IllegalArgumentException("Only administrators can cancel");
-            } else if (assigned == null)
+              }
+            } else if (assigned == null) {
               throw new IllegalArgumentException("Assign an agent first");
-            if (note != null && note.length() > 500)
+            }
+            if (note != null && note.length() > 500) {
               throw new IllegalArgumentException("Note maximum is 500 characters");
+            }
             int changed =
                 execute(
                     c,
@@ -303,27 +355,31 @@ public final class Store {
                     to,
                     id,
                     r.get("version"));
-            if (changed != 1)
+            if (changed != 1) {
               throw new IllegalArgumentException("Parcel changed; refresh and retry");
+            }
             event(c, id, to, location, note, user);
-            if (assigned != null)
+            if (assigned != null) {
               execute(
                   c,
                   "INSERT INTO alerts(user_id,parcel_id,message) VALUES(?,?,?)",
                   assigned,
                   id,
                   r.get("tracking") + ": " + to);
+            }
           }
           return null;
         });
   }
 
   public List<Map<String, Object>> track(String tracking) throws Exception {
+    if (tracking == null) {
+      return List.of();
+    }
     try (Connection c = connect()) {
       return query(
           c,
-          "SELECT s.tracking,e.status,e.location,e.occurred_at FROM shipments s JOIN events e ON"
-              + " e.parcel_id=s.id WHERE s.tracking=? ORDER BY e.occurred_at,e.id",
+          "SELECT s.tracking,e.status,e.location,e.occurred_at FROM shipments s JOIN events e ON e.parcel_id=s.id WHERE s.tracking=? ORDER BY e.occurred_at,e.id",
           tracking.trim());
     }
   }
@@ -337,11 +393,12 @@ public final class Store {
               id,
               user.role(),
               user.id())
-          .isEmpty()) throw new IllegalArgumentException("Permission denied");
+          .isEmpty()) {
+        throw new IllegalArgumentException("Permission denied");
+      }
       return query(
           c,
-          "SELECT status,location,note,actor_id,occurred_at FROM events WHERE parcel_id=? ORDER BY"
-              + " occurred_at,id",
+          "SELECT status,location,note,actor_id,occurred_at FROM events WHERE parcel_id=? ORDER BY occurred_at,id",
           id);
     }
   }
@@ -351,8 +408,7 @@ public final class Store {
       authorize(c, user, false);
       return query(
           c,
-          "SELECT id,parcel_id,message,is_read,created_at FROM alerts WHERE user_id=? ORDER BY id"
-              + " DESC LIMIT 100",
+          "SELECT id,parcel_id,message,is_read,created_at FROM alerts WHERE user_id=? ORDER BY id DESC LIMIT 100",
           user.id());
     }
   }
@@ -369,15 +425,13 @@ public final class Store {
       authorize(c, user, false);
       return query(
           c,
-          "SELECT COUNT(*) AS total,COALESCE(SUM(CASE WHEN status='DELIVERED' THEN 1 ELSE 0 END),0)"
-              + " AS delivered,COALESCE(SUM(CASE WHEN status='DELIVERY_FAILED' THEN 1 ELSE 0"
-              + " END),0) AS failed,COALESCE(SUM(CASE WHEN status NOT IN"
-              + " ('DELIVERED','CANCELLED','RETURNED') THEN 1 ELSE 0 END),0) AS"
-              + " active,COALESCE(SUM(CASE WHEN agent_id IS NULL AND status NOT IN"
-              + " ('DELIVERED','CANCELLED','RETURNED') THEN 1 ELSE 0 END),0) AS"
-              + " unassigned,COALESCE(SUM(CASE WHEN expected<CURRENT_DATE AND status NOT IN"
-              + " ('DELIVERED','CANCELLED','RETURNED') THEN 1 ELSE 0 END),0) AS overdue FROM"
-              + " shipments WHERE (?='ADMIN' OR agent_id=?)",
+          "SELECT COUNT(*) AS total,"
+              + "COALESCE(SUM(CASE WHEN status='DELIVERED' THEN 1 ELSE 0 END),0) AS delivered,"
+              + "COALESCE(SUM(CASE WHEN status='DELIVERY_FAILED' THEN 1 ELSE 0 END),0) AS failed,"
+              + "COALESCE(SUM(CASE WHEN status NOT IN ('DELIVERED','CANCELLED','RETURNED') THEN 1 ELSE 0 END),0) AS active,"
+              + "COALESCE(SUM(CASE WHEN agent_id IS NULL AND status NOT IN ('DELIVERED','CANCELLED','RETURNED') THEN 1 ELSE 0 END),0) AS unassigned,"
+              + "COALESCE(SUM(CASE WHEN expected<CURRENT_DATE AND status NOT IN ('DELIVERED','CANCELLED','RETURNED') THEN 1 ELSE 0 END),0) AS overdue "
+              + "FROM shipments WHERE (?='ADMIN' OR agent_id=?)",
           user.role(),
           user.id());
     }

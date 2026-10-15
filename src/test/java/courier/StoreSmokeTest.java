@@ -3,6 +3,7 @@ package courier;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.*;
+import org.junit.jupiter.api.Test;
 
 /** Executable integration suite: H2 compatibility or a disposable MySQL database. */
 public class StoreSmokeTest {
@@ -14,7 +15,9 @@ public class StoreSmokeTest {
 
   static void check(boolean value) {
     checks++;
-    if (!value) throw new AssertionError("Check " + checks + " failed");
+    if (!value) {
+      throw new AssertionError("Check " + checks + " failed");
+    }
   }
 
   static void denied(Action action) throws Exception {
@@ -24,6 +27,12 @@ public class StoreSmokeTest {
     } catch (IllegalArgumentException expected) {
       checks++;
     }
+  }
+
+  @Test
+  public void testAllStoreOperations() throws Exception {
+    checks = 0;
+    main(new String[0]);
   }
 
   public static void main(String[] args) throws Exception {
@@ -77,7 +86,9 @@ public class StoreSmokeTest {
             "OUT_FOR_DELIVERY",
             "DELIVERY_FAILED",
             "OUT_FOR_DELIVERY",
-            "DELIVERED")) s.change(one, id, null, status, "City hub", "Private internal note");
+            "DELIVERED")) {
+      s.change(one, id, null, status, "City hub", "Private internal note");
+    }
     denied(() -> s.change(admin, id, two.id(), null, null, null));
     var publicRows = s.track(tracking);
     check(publicRows.size() == 8);
