@@ -31,7 +31,7 @@ public final class MySQLWorkstation {
     this.user = user;
     this.password = password;
 
-    frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
     frame.setSize(1100, 700);
     frame.setMinimumSize(new Dimension(850, 500));
     frame.setLocationRelativeTo(null);
