@@ -1,7 +1,6 @@
 # Courier JDBC desktop application
 
-Independent Java 17 + Swing + JDBC + MySQL application. No Spring Boot, React, application server, or ORM is required.
-
+Independent Java 17 + Swing + JDBC + MySQL application.
 ## Set up MySQL 8+
 
 Run as a database administrator (replace the example password):
